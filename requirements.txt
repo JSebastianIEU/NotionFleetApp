@@ -1,0 +1,26 @@
+# Web framework
+fastapi
+uvicorn[standard]
+
+# Data processing
+pandas
+numpy
+
+# Visualization
+matplotlib
+seaborn
+
+# PDF generation
+fpdf
+
+# HTTP requests
+requests
+
+# Notion SDK
+notion-client
+
+# Type validation / models
+pydantic
+
+# Handling file uploads or multipart requests (optional but useful)
+python-multipart
