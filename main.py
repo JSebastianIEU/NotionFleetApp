@@ -6,7 +6,6 @@ from report_generator import generar_reporte
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_VERSION = "2022-06-28"
-NOTION_DB_REPORTES_ID = os.getenv("NOTION_REPORTES_DB_ID")
 
 app = FastAPI()
 
@@ -21,7 +20,20 @@ async def handle_webhook(request: Request):
     payload = await request.json()
 
     try:
-        props = payload["properties"]
+        # Notion envía los datos bajo 'event' → 'data' cuando usas botones en una automatización
+        page_id = payload.get("event", {}).get("data", {}).get("id")
+        if not page_id:
+            return {"error": "No se encontró el page_id en el payload."}
+
+        # Obtener datos completos de la página
+        page_url = f"https://api.notion.com/v1/pages/{page_id}"
+        page_response = requests.get(page_url, headers=headers)
+        if page_response.status_code != 200:
+            return {"error": "No se pudo obtener los datos de la página."}
+
+        page_data = page_response.json()
+        props = page_data["properties"]
+
         fecha_inicio = props["Fecha de inicio"]["date"]["start"]
         fecha_fin = props["Fecha de fin"]["date"]["start"]
         propietario = props["Propietario"]["select"]["name"]
@@ -41,38 +53,33 @@ async def handle_webhook(request: Request):
         # Generar el PDF
         output_pdf = generar_reporte(csv_local_path, fecha_inicio, fecha_fin, propietario)
 
-        # Subir PDF a file.io
+        # Subir PDF a file.io (puedes cambiarlo por S3, etc.)
         with open(output_pdf, 'rb') as f:
             upload_response = requests.post('https://file.io', files={'file': f})
         if upload_response.status_code != 200:
             return {"error": "No se pudo subir el PDF."}
         pdf_url = upload_response.json().get("link")
 
-        # Crear nueva página en base de datos de reportes
-        create_url = "https://api.notion.com/v1/pages"
-        new_page = {
-            "parent": {"database_id": NOTION_DB_REPORTES_ID},
+        # Actualizar la misma página con la URL del PDF en la columna 'Reporte'
+        update_url = f"https://api.notion.com/v1/pages/{page_id}"
+        update_payload = {
             "properties": {
-                "Nombre": {
-                    "title": [{"text": {"content": f"Reporte {propietario} ({fecha_inicio} - {fecha_fin})"}}]
-                },
-                "PDF": {
-                    "url": pdf_url
-                },
-                "Propietario": {
-                    "select": {"name": propietario}
-                },
-                "Rango": {
-                    "rich_text": [{"text": {"content": f"{fecha_inicio} - {fecha_fin}"}}]
+                "Reporte": {
+                    "files": [
+                        {
+                            "name": f"Reporte_{propietario}.pdf",
+                            "external": {"url": pdf_url}
+                        }
+                    ]
                 }
             }
         }
 
-        notion_create = requests.post(create_url, headers=headers, json=new_page)
-        if notion_create.status_code != 200:
-            return {"error": "No se pudo crear la entrada en Notion."}
+        update_response = requests.patch(update_url, headers=headers, json=update_payload)
+        if update_response.status_code != 200:
+            return {"error": "No se pudo actualizar la página con el PDF."}
 
-        return {"mensaje": "✅ Reporte generado y subido con éxito.", "archivo": pdf_url}
+        return {"mensaje": "✅ Reporte generado y adjuntado con éxito.", "archivo": pdf_url}
 
     except Exception as e:
         return {"error": str(e)}
