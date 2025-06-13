@@ -6,14 +6,15 @@ import requests
 from report_generator import generar_reporte_df
 import pandas as pd
 from datetime import datetime
+import unicodedata
+import re
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_VERSION = "2022-06-28"
-NOTION_BTN_DB_ID = os.getenv("NOTION_BTN_DB_ID")  # base con una fila y el botón
-NOTION_DATA_DB_ID = os.getenv("NOTION_DATA_DB_ID")  # base de datos de registros
+NOTION_BTN_DB_ID = os.getenv("NOTION_BTN_DB_ID")
+NOTION_DATA_DB_ID = os.getenv("NOTION_DATA_DB_ID")
 
 app = FastAPI()
-
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 headers = {
@@ -22,11 +23,17 @@ headers = {
     "Content-Type": "application/json"
 }
 
+def slugify(value):
+    value = str(value)
+    value = unicodedata.normalize('NFKD', value).encode('ascii', 'ignore').decode('ascii')
+    value = re.sub(r'[^\w\s-]', '', value).strip().lower()
+    return re.sub(r'[-\s]+', '_', value)
+
 def obtener_fila_de_control():
     url = f"https://api.notion.com/v1/databases/{NOTION_BTN_DB_ID}/query"
     response = requests.post(url, headers=headers)
     data = response.json()
-    return data['results'][0]  # solo una fila
+    return data['results'][0]
 
 def obtener_datos_tabulares():
     url = f"https://api.notion.com/v1/databases/{NOTION_DATA_DB_ID}/query"
@@ -40,7 +47,7 @@ def obtener_datos_tabulares():
         registros.extend(data['results'])
         if not data.get("has_more"):
             break
-        next_cursor = data["next_cursor"]
+        next_cursor = data.get("next_cursor")
 
     rows = []
     for r in registros:
@@ -70,34 +77,30 @@ async def handle_webhook():
 
         df_completo = obtener_datos_tabulares()
 
-        # Generar PDF y guardarlo en carpeta static/
-        output_pdf = generar_reporte_df(df_completo, fecha_inicio, fecha_fin, propietario)
-        pdf_path = f"static/{output_pdf}"
-        public_url = f"https://notionfleetapp.onrender.com/static/{output_pdf}"
+        # Generar y sanitizar nombre del PDF
+        raw_filename = generar_reporte_df(df_completo, fecha_inicio, fecha_fin, propietario)
+        sanitized_name = slugify(raw_filename)
+        sanitized_pdf_path = f"static/{sanitized_name}"
 
-        # Leer PDF para subirlo a Notion como archivo
-        with open(pdf_path, "rb") as f:
-            upload = requests.post(
-                "https://api.notion.com/v1/blocks",
-                headers={
-                    "Authorization": f"Bearer {NOTION_TOKEN}",
-                    "Notion-Version": NOTION_VERSION
-                },
-                files={
-                    "file": (output_pdf, f, "application/pdf")
-                }
-            )
+        # Renombrar si es necesario
+        os.rename(f"static/{raw_filename}", sanitized_pdf_path)
 
-        # Alternativa más simple: poner la URL pública en la columna "Reporte"
+        public_url = f"https://notionfleetapp.onrender.com/static/{sanitized_name}"
+        print(f"🔗 PDF URL generado: {public_url}")
+
+        # Actualizar campo "Reporte" con URL pública del PDF
         update_url = f"https://api.notion.com/v1/pages/{page_id}"
         body = {
             "properties": {
                 "Reporte": {
+                    "type": "url",
                     "url": public_url
                 }
             }
         }
         update = requests.patch(update_url, headers=headers, json=body)
+        print(f"📤 PATCH Status: {update.status_code} | Response: {update.text}")
+
         if update.status_code != 200:
             return {"error": "No se pudo actualizar Notion con la URL del PDF."}
 
