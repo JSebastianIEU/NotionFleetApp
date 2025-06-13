@@ -161,6 +161,7 @@ def generar_reporte_df(df, fecha_inicio, fecha_fin, propietario_deseado):
     pdf.tabla(df_filtrado)
     pdf.output(output_path)
 
+    # Limpiar imágenes temporales
     for img in ["balance_moderno.png", "ahorro_moderno.png", "gastos_moderno.png", "entregas_moderno.png"]:
         if os.path.exists(img):
             os.remove(img)
