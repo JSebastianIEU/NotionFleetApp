@@ -1,9 +1,11 @@
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 import os
 import requests
 from report_generator import generar_reporte_df
 import pandas as pd
+from datetime import datetime
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_VERSION = "2022-06-28"
@@ -11,6 +13,8 @@ NOTION_BTN_DB_ID = os.getenv("NOTION_BTN_DB_ID")  # base con una fila y el botó
 NOTION_DATA_DB_ID = os.getenv("NOTION_DATA_DB_ID")  # base de datos de registros
 
 app = FastAPI()
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 headers = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -65,29 +69,39 @@ async def handle_webhook():
         propietario = props["Propietario"]["select"]["name"]
 
         df_completo = obtener_datos_tabulares()
+
+        # Generar PDF y guardarlo en carpeta static/
         output_pdf = generar_reporte_df(df_completo, fecha_inicio, fecha_fin, propietario)
+        pdf_path = f"static/{output_pdf}"
+        public_url = f"https://notionfleetapp.onrender.com/static/{output_pdf}"
 
-        # Subir el PDF a file.io
-        with open(output_pdf, 'rb') as f:
-            upload = requests.post('https://file.io', files={'file': f})
-        if upload.status_code != 200:
-            return {"error": "No se pudo subir el PDF."}
-        pdf_url = upload.json().get("link")
+        # Leer PDF para subirlo a Notion como archivo
+        with open(pdf_path, "rb") as f:
+            upload = requests.post(
+                "https://api.notion.com/v1/blocks",
+                headers={
+                    "Authorization": f"Bearer {NOTION_TOKEN}",
+                    "Notion-Version": NOTION_VERSION
+                },
+                files={
+                    "file": (output_pdf, f, "application/pdf")
+                }
+            )
 
-        # Actualizar la fila con el link del PDF
+        # Alternativa más simple: poner la URL pública en la columna "Reporte"
         update_url = f"https://api.notion.com/v1/pages/{page_id}"
         body = {
             "properties": {
                 "Reporte": {
-                    "url": pdf_url
+                    "url": public_url
                 }
             }
         }
         update = requests.patch(update_url, headers=headers, json=body)
         if update.status_code != 200:
-            return {"error": "No se pudo actualizar la fila con el PDF."}
+            return {"error": "No se pudo actualizar Notion con la URL del PDF."}
 
-        return {"mensaje": "✅ PDF generado y subido con éxito.", "archivo": pdf_url}
+        return {"mensaje": "✅ PDF generado y disponible.", "archivo": public_url}
 
     except Exception as e:
         return {"error": str(e)}

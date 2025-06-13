@@ -7,6 +7,7 @@ from matplotlib.ticker import FuncFormatter
 import re
 import os
 from datetime import datetime
+from slugify import slugify
 
 FONT_PATH = "times.ttf"
 
@@ -43,6 +44,20 @@ def generar_reporte_df(df, fecha_inicio, fecha_fin, propietario_deseado):
     plt.rcParams['font.family'] = 'DejaVu Sans'
     formatter = FuncFormatter(lambda x, _: f'{int(x):,}')
 
+    def save_plot(data, title, ylabel, filename, color_palette):
+        fig, ax = plt.subplots(figsize=(9, 3))
+        bars = ax.bar(data.index, data.values, color=sns.color_palette(color_palette, len(data)), alpha=0.8)
+        for bar in bars:
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{int(bar.get_height()):,}', 
+                    ha='center', va='bottom', fontsize=6)
+        ax.set_title(title)
+        ax.set_ylabel(ylabel)
+        ax.yaxis.set_major_formatter(formatter)
+        plt.xticks(rotation=45, ha='right')
+        plt.tight_layout()
+        plt.savefig(filename, dpi=300, transparent=True)
+        plt.close()
+
     pivot_line = df_filtrado.groupby(['Fecha', 'Vehiculo'])['Balance'].sum().reset_index()
     pivot_line = pivot_line.pivot(index='Fecha', columns='Vehiculo', values='Balance').fillna(0).cumsum()
     fig1, ax1 = plt.subplots(figsize=(9, 3))
@@ -59,41 +74,13 @@ def generar_reporte_df(df, fecha_inicio, fecha_fin, propietario_deseado):
     plt.close()
 
     ahorro = df_filtrado.groupby("Vehiculo")["Ahorro"].sum()
-    ahorro = ahorro[ahorro > 0]
-    fig2, ax2 = plt.subplots(figsize=(9, 3))
-    bars = ax2.bar(ahorro.index, ahorro.values, color=sns.color_palette("Blues", len(ahorro)), alpha=0.8)
-    for bar in bars:
-        ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{int(bar.get_height()):,}', ha='center', va='bottom', fontsize=6)
-    ax2.set_title("Ahorro por Vehículo")
-    ax2.yaxis.set_major_formatter(formatter)
-    plt.xticks(rotation=45, ha='right')
-    plt.tight_layout()
-    plt.savefig("ahorro_moderno.png", dpi=300, transparent=True)
-    plt.close()
+    save_plot(ahorro[ahorro > 0], "Ahorro por Vehículo", "COP", "ahorro_moderno.png", "Blues")
 
     gastos = df_filtrado.groupby("Vehiculo")["Factura/Gasto"].sum().sort_values(ascending=False)
-    fig3, ax3 = plt.subplots(figsize=(9, 3))
-    bars = ax3.bar(gastos.index, gastos.values, color=sns.color_palette("flare", len(gastos)), alpha=0.8)
-    for bar in bars:
-        ax3.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{int(bar.get_height()):,}', ha='center', va='bottom', fontsize=6)
-    ax3.set_title("Gastos por Taxi")
-    ax3.yaxis.set_major_formatter(formatter)
-    plt.xticks(rotation=45, ha='right')
-    plt.tight_layout()
-    plt.savefig("gastos_moderno.png", dpi=300, transparent=True)
-    plt.close()
+    save_plot(gastos, "Gastos por Taxi", "COP", "gastos_moderno.png", "flare")
 
     entregas = df_filtrado.groupby("Vehiculo")["Entrega"].sum().sort_values(ascending=False)
-    fig4, ax4 = plt.subplots(figsize=(9, 3))
-    bars = ax4.bar(entregas.index, entregas.values, color=sns.color_palette("crest", len(entregas)), alpha=0.8)
-    for bar in bars:
-        ax4.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{int(bar.get_height()):,}', ha='center', va='bottom', fontsize=6)
-    ax4.set_title("Entregas por Taxi")
-    ax4.yaxis.set_major_formatter(formatter)
-    plt.xticks(rotation=45, ha='right')
-    plt.tight_layout()
-    plt.savefig("entregas_moderno.png", dpi=300, transparent=True)
-    plt.close()
+    save_plot(entregas, "Entregas por Taxi", "COP", "entregas_moderno.png", "crest")
 
     class PDF(FPDF):
         def __init__(self):
@@ -162,13 +149,20 @@ def generar_reporte_df(df, fecha_inicio, fecha_fin, propietario_deseado):
                     self.set_xy(x + col_width, y)
                 self.ln()
 
-    output_name = f"reporte_{propietario_deseado.replace(' ', '_')}_{fecha_inicio}.pdf"
+    safe_name = slugify(f"{propietario_deseado}_{fecha_inicio}")
+    output_name = f"reporte_{safe_name}.pdf"
+    output_path = os.path.join("static", output_name)
+
     pdf = PDF()
     pdf.add_page()
     pdf.seccion_metricas()
     pdf.insertar_graficos()
     pdf.add_page()
     pdf.tabla(df_filtrado)
-    pdf.output(output_name)
+    pdf.output(output_path)
+
+    for img in ["balance_moderno.png", "ahorro_moderno.png", "gastos_moderno.png", "entregas_moderno.png"]:
+        if os.path.exists(img):
+            os.remove(img)
 
     return output_name

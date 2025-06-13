@@ -16,11 +16,14 @@ fpdf
 # HTTP requests
 requests
 
-# Notion SDK
+# Notion SDK (opcional, si usas solo requests puedes eliminar esta línea)
 notion-client
 
 # Type validation / models
 pydantic
 
-# Handling file uploads or multipart requests (optional but useful)
+# Handling file uploads or multipart requests (opcional pero útil)
 python-multipart
+
+# Utilidad para sanitizar nombres de archivos
+python-slugify
