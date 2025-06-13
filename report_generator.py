@@ -15,11 +15,10 @@ def clean_currency(val):
         return float(val.replace("COP", "").replace(",", "").replace(" ", "").strip() or 0)
     return float(val) if val != "" else 0.0
 
-def generar_reporte(csv_path, fecha_inicio, fecha_fin, propietario_deseado):
-    df = pd.read_csv(csv_path)
+def generar_reporte_df(df, fecha_inicio, fecha_fin, propietario_deseado):
     df.fillna("", inplace=True)
     df.rename(columns={"Fecha de Movimiento": "Fecha"}, inplace=True)
-    df['Vehiculo'] = df['Vehiculo'].apply(lambda x: re.match(r'^\w+', str(x)).group(0))
+    df['Vehiculo'] = df['Vehiculo'].apply(lambda x: re.match(r'^\w+', str(x)).group(0) if isinstance(x, str) else "")
     df['Fecha'] = pd.to_datetime(df['Fecha'], dayfirst=True).dt.date
 
     for col in ["Entrega", "Ahorro", "Factura/Gasto", "Balance"]:
@@ -30,7 +29,7 @@ def generar_reporte(csv_path, fecha_inicio, fecha_fin, propietario_deseado):
     df_filtrado = df[(df['Fecha'] >= fecha_inicio_dt) & (df['Fecha'] <= fecha_fin_dt)]
     df_filtrado = df_filtrado[df_filtrado['Propietario'] == propietario_deseado]
 
-    df_filtrado.drop(columns=['Propietario', 'Comprobante'], inplace=True)
+    df_filtrado.drop(columns=['Propietario', 'Comprobante'], inplace=True, errors='ignore')
     df_filtrado.fillna(0.0, inplace=True)
     rango_fechas = f"{fecha_inicio_dt.strftime('%d/%m/%Y')} - {fecha_fin_dt.strftime('%d/%m/%Y')}"
 
@@ -40,12 +39,10 @@ def generar_reporte(csv_path, fecha_inicio, fecha_fin, propietario_deseado):
     total_gastos = df_filtrado["Factura/Gasto"].sum()
     total_balance = df_filtrado["Balance"].sum()
 
-    # GRÁFICOS
     sns.set_style("whitegrid")
     plt.rcParams['font.family'] = 'DejaVu Sans'
     formatter = FuncFormatter(lambda x, _: f'{int(x):,}')
 
-    # Gráfico 1: Balance acumulado
     pivot_line = df_filtrado.groupby(['Fecha', 'Vehiculo'])['Balance'].sum().reset_index()
     pivot_line = pivot_line.pivot(index='Fecha', columns='Vehiculo', values='Balance').fillna(0).cumsum()
     fig1, ax1 = plt.subplots(figsize=(9, 3))
@@ -61,7 +58,6 @@ def generar_reporte(csv_path, fecha_inicio, fecha_fin, propietario_deseado):
     plt.savefig("balance_moderno.png", dpi=300, transparent=True)
     plt.close()
 
-    # Gráfico 2: Ahorro por vehículo (BARRAS)
     ahorro = df_filtrado.groupby("Vehiculo")["Ahorro"].sum()
     ahorro = ahorro[ahorro > 0]
     fig2, ax2 = plt.subplots(figsize=(9, 3))
@@ -75,7 +71,6 @@ def generar_reporte(csv_path, fecha_inicio, fecha_fin, propietario_deseado):
     plt.savefig("ahorro_moderno.png", dpi=300, transparent=True)
     plt.close()
 
-    # Gráfico 3: Gastos por taxi
     gastos = df_filtrado.groupby("Vehiculo")["Factura/Gasto"].sum().sort_values(ascending=False)
     fig3, ax3 = plt.subplots(figsize=(9, 3))
     bars = ax3.bar(gastos.index, gastos.values, color=sns.color_palette("flare", len(gastos)), alpha=0.8)
@@ -88,7 +83,6 @@ def generar_reporte(csv_path, fecha_inicio, fecha_fin, propietario_deseado):
     plt.savefig("gastos_moderno.png", dpi=300, transparent=True)
     plt.close()
 
-    # Gráfico 4: Entregas por taxi
     entregas = df_filtrado.groupby("Vehiculo")["Entrega"].sum().sort_values(ascending=False)
     fig4, ax4 = plt.subplots(figsize=(9, 3))
     bars = ax4.bar(entregas.index, entregas.values, color=sns.color_palette("crest", len(entregas)), alpha=0.8)
@@ -101,7 +95,6 @@ def generar_reporte(csv_path, fecha_inicio, fecha_fin, propietario_deseado):
     plt.savefig("entregas_moderno.png", dpi=300, transparent=True)
     plt.close()
 
-    # PDF
     class PDF(FPDF):
         def __init__(self):
             super().__init__()

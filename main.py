@@ -1,11 +1,14 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 import uvicorn
 import os
 import requests
-from report_generator import generar_reporte
+from report_generator import generar_reporte_df
+import pandas as pd
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_VERSION = "2022-06-28"
+NOTION_BTN_DB_ID = os.getenv("NOTION_BTN_DB_ID")  # base con una fila y el botón
+NOTION_DATA_DB_ID = os.getenv("NOTION_DATA_DB_ID")  # base de datos de registros
 
 app = FastAPI()
 
@@ -15,92 +18,83 @@ headers = {
     "Content-Type": "application/json"
 }
 
-@app.post("/webhook")
-async def handle_webhook(request: Request):
-    payload = await request.json()
-    print("🔔 Webhook recibido:", payload)
-
-    # ✅ CORREGIDO: obtener el page_id correctamente
-    page_id = payload.get("data", {}).get("id")
-    print("➡️ page_id determinado:", page_id)
-    if not page_id:
-        return {"error": "No se encontró page_id en el payload."}
-
-    # OBTENER página para leer propiedad "Archivo CSV"
-    page_url = f"https://api.notion.com/v1/pages/{page_id}"
-    response = requests.get(page_url, headers=headers)
-    print("Conexión Notion GET status:", response.status_code)
-    if response.status_code != 200:
-        print("❌ Error al obtener página:", response.text)
-        return {"error": "No se pudieron obtener datos de Notion."}
-
+def obtener_fila_de_control():
+    url = f"https://api.notion.com/v1/databases/{NOTION_BTN_DB_ID}/query"
+    response = requests.post(url, headers=headers)
     data = response.json()
-    props = data.get("properties", {})
-    print("Propiedades recibidas:", list(props.keys()))
+    return data['results'][0]  # solo una fila
 
-    # Extraer fechas y propietario (solo para log)
-    fecha_inicio = props.get("Fecha de inicio", {}).get("date", {}).get("start")
-    fecha_fin = props.get("Fecha de fin", {}).get("date", {}).get("start")
-    propietario = props.get("Propietario", {}).get("select", {}).get("name")
-    print(f"Fechas: {fecha_inicio} → {fecha_fin}, Propietario: {propietario}")
+def obtener_datos_tabulares():
+    url = f"https://api.notion.com/v1/databases/{NOTION_DATA_DB_ID}/query"
+    registros = []
+    next_cursor = None
 
-    # Archivo CSV:
-    files = props.get("Archivo CSV", {}).get("files", [])
-    print("Archivos CSV encontrados:", files)
-    if not files:
-        return {"error": "No se subió ningún archivo CSV."}
-    file_url = files[0].get("file", {}).get("url")
-    print("URL del CSV:", file_url)
+    while True:
+        payload = {"start_cursor": next_cursor} if next_cursor else {}
+        res = requests.post(url, headers=headers, json=payload)
+        data = res.json()
+        registros.extend(data['results'])
+        if not data.get("has_more"):
+            break
+        next_cursor = data["next_cursor"]
 
-    # DESCARGAR CSV
+    rows = []
+    for r in registros:
+        props = r["properties"]
+        rows.append({
+            "Fecha": props["Fecha de Movimiento"]["date"]["start"] if props["Fecha de Movimiento"]["date"] else None,
+            "Vehiculo": props["Vehiculo"]["title"][0]["text"]["content"] if props["Vehiculo"]["title"] else "",
+            "Entrega": props["Entrega"]["rich_text"][0]["text"]["content"] if props["Entrega"]["rich_text"] else "",
+            "Ahorro": props["Ahorro"]["rich_text"][0]["text"]["content"] if props["Ahorro"]["rich_text"] else "",
+            "Factura/Gasto": props["Factura/Gasto"]["rich_text"][0]["text"]["content"] if props["Factura/Gasto"]["rich_text"] else "",
+            "Balance": props["Balance"]["rich_text"][0]["text"]["content"] if props["Balance"]["rich_text"] else "",
+            "Propietario": props["Propietario"]["select"]["name"] if props["Propietario"]["select"] else "",
+            "Comprobante": props["Comprobante"]["rich_text"][0]["text"]["content"] if props["Comprobante"]["rich_text"] else ""
+        })
+    return pd.DataFrame(rows)
+
+@app.post("/webhook")
+async def handle_webhook():
     try:
-        file_response = requests.get(file_url, headers={"Authorization": f"Bearer {NOTION_TOKEN}"})
-        open("archivo_temporal.csv", "wb").write(file_response.content)
-        print("✅ CSV descargado correctamente.")
-    except Exception as e:
-        print("❌ Error descargando CSV:", e)
-        return {"error": "No se pudo descargar CSV."}
+        fila = obtener_fila_de_control()
+        props = fila["properties"]
+        page_id = fila["id"]
 
-    # GENERAR PDF
-    try:
-        output_pdf = generar_reporte("archivo_temporal.csv", fecha_inicio, fecha_fin, propietario)
-        print("✅ PDF generado:", output_pdf)
-    except Exception as e:
-        print("❌ Error generando PDF:", e)
-        return {"error": "Fallo al generar el reporte PDF."}
+        fecha_inicio = props["Fecha de inicio"]["date"]["start"]
+        fecha_fin = props["Fecha de fin"]["date"]["start"]
+        propietario = props["Propietario"]["select"]["name"]
 
-    # SUBIR PDF a file.io
-    try:
-        resp = requests.post("https://file.io", files={'file': open(output_pdf, 'rb')})
-        print("File.io response code:", resp.status_code)
-        pdf_url = resp.json().get("link")
-        print("📎 URL del PDF:", pdf_url)
-    except Exception as e:
-        print("❌ Error subiendo PDF:", e)
-        return {"error": "No se pudo subir el PDF."}
+        df_completo = obtener_datos_tabulares()
+        output_pdf = generar_reporte_df(df_completo, fecha_inicio, fecha_fin, propietario)
 
-    # ACTUALIZAR la misma fila con el PDF
-    update_url = f"https://api.notion.com/v1/pages/{page_id}"
-    update_payload = {
-        "properties": {
-            "Reporte": {
-                "files": [
-                    {"name": os.path.basename(output_pdf), "external": {"url": pdf_url}}
-                ]
+        # Subir el PDF a file.io
+        with open(output_pdf, 'rb') as f:
+            upload = requests.post('https://file.io', files={'file': f})
+        if upload.status_code != 200:
+            return {"error": "No se pudo subir el PDF."}
+        pdf_url = upload.json().get("link")
+
+        # Actualizar la fila con el link del PDF
+        update_url = f"https://api.notion.com/v1/pages/{page_id}"
+        body = {
+            "properties": {
+                "Reporte": {
+                    "url": pdf_url
+                }
             }
         }
-    }
-    upd_resp = requests.patch(update_url, headers=headers, json=update_payload)
-    print("PATCH Notion status:", upd_resp.status_code, upd_resp.text)
-    if upd_resp.status_code != 200:
-        return {"error": "No se pudo actualizar la página con el PDF."}
+        update = requests.patch(update_url, headers=headers, json=body)
+        if update.status_code != 200:
+            return {"error": "No se pudo actualizar la fila con el PDF."}
 
-    print("✅ PDF agregado a Notion en columna 'Reporte'.")
-    return {"mensaje": "✅ Reporte generado y adjuntado.", "pdf_url": pdf_url}
+        return {"mensaje": "✅ PDF generado y subido con éxito.", "archivo": pdf_url}
+
+    except Exception as e:
+        return {"error": str(e)}
 
 @app.get("/")
 def root():
-    return {"mensaje": "API activa — presiona el botón de Notion para generar reporte."}
+    return {"mensaje": "✅ API activa. POST /webhook para generar el PDF desde Notion."}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
