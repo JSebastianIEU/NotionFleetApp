@@ -20,8 +20,8 @@ async def handle_webhook(request: Request):
     payload = await request.json()
     print("🔔 Webhook recibido:", payload)
 
-    # EXTRAER page_id desde el payload:
-    page_id = payload.get("event", {}).get("data", {}).get("id") or payload.get("page_id")
+    # ✅ CORREGIDO: obtener el page_id correctamente
+    page_id = payload.get("data", {}).get("id")
     print("➡️ page_id determinado:", page_id)
     if not page_id:
         return {"error": "No se encontró page_id en el payload."}
